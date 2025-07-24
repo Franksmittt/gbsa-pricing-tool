@@ -5,6 +5,38 @@ import { Plus, Pencil, Trash2, X, AlertTriangle, DollarSign, Percent, Search, Do
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
+// --- START: NEW LocalStorage Custom Hook ---
+function useLocalStorage(key, initialValue) {
+  const [storedValue, setStoredValue] = useState(() => {
+    // Prevent build error during server-side rendering
+    if (typeof window === 'undefined') {
+      return initialValue;
+    }
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      console.error(error);
+      return initialValue;
+    }
+  });
+
+  const setValue = (value) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  return [storedValue, setValue];
+}
+// --- END: NEW LocalStorage Custom Hook ---
+
 // --- CONFIGURATION (/config/data.ts) ---
 const VAT_RATE = 0.15;
 const BRANCHES = ['Alberton', 'Vanderbijlpark', 'Sasolburg'];
@@ -866,10 +898,11 @@ export default function App() {
   const [isMounted, setIsMounted] = useState(false);
   const [activeView, setActiveView] = useState('matrix');
   const [activeBranch, setActiveBranch] = useState(BRANCHES[0]);
-  const [suppliers, setSuppliers] = useState(INITIAL_SUPPLIERS);
-  const [supplierProducts, setSupplierProducts] = useState(INITIAL_SUPPLIER_PRODUCTS);
   
-  const [gpInputs, setGpInputs] = useState(() => {
+  // --- MODIFIED: Use the useLocalStorage hook ---
+  const [suppliers, setSuppliers] = useLocalStorage('gbsa-suppliers', INITIAL_SUPPLIERS);
+  const [supplierProducts, setSupplierProducts] = useLocalStorage('gbsa-products', INITIAL_SUPPLIER_PRODUCTS);
+  const [gpInputs, setGpInputs] = useLocalStorage('gbsa-gpInputs', () => {
     const initialState = {};
     const allSkus = [...new Set([...INITIAL_SUPPLIER_PRODUCTS.map(p => p.internalSku), ...INTERNAL_SKU_CATEGORIES])];
     BRANCHES.forEach(branch => {
@@ -880,6 +913,7 @@ export default function App() {
     });
     return initialState;
   });
+  
   const fileInputRef = useRef(null);
 
   useEffect(() => {
