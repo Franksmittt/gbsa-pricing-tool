@@ -279,9 +279,42 @@ const SupplierCostView = ({ suppliers, supplierProducts, onProductUpdate, onProd
   const [editingProduct, setEditingProduct] = useState(null);
   const [editingSupplier, setEditingSupplier] = useState(null);
 
-  const activeSupplier = suppliers.find(s => s.id === activeSupplierId);
+  const activeSupplier = useMemo(() => suppliers.find(s => s.id === activeSupplierId), [suppliers, activeSupplierId]);
   
-  const productsForSupplier = supplierProducts.filter(p => p.supplierId === activeSupplierId);
+  const productsForSupplier = useMemo(() => supplierProducts.filter(p => p.supplierId === activeSupplierId), [supplierProducts, activeSupplierId]);
+
+  const handleExportCsv = () => {
+    if (!activeSupplier) return;
+
+    const headers = ['SKU (Internal)', 'SKU (Supplier)', 'Invoice Price', 'Scrap Deduction', 'Adjusted Cost'];
+
+    const rows = productsForSupplier.map(product => {
+      const invoicePrice = product.invoicePrice.toFixed(2);
+      const scrapDeduction = (product.supplierType === 'Local/Import' ? SCRAP_VALUES[product.scrapType] || 0 : 0).toFixed(2);
+      const adjustedCost = getAdjustedCost(product).toFixed(2);
+      
+      return [
+        product.internalSku,
+        product.supplierSku,
+        invoicePrice,
+        scrapDeduction,
+        adjustedCost
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const fileName = `Supplier_Costs_${activeSupplier.name.replace(/ /g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const handleEditProduct = (product) => {
     setEditingProduct(product);
@@ -331,7 +364,8 @@ const SupplierCostView = ({ suppliers, supplierProducts, onProductUpdate, onProd
     <Card>
       <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
         <h2 className="text-2xl font-bold text-gray-900">Supplier Costs</h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+            <Button onClick={handleExportCsv} variant="secondary" disabled={!activeSupplierId || productsForSupplier.length === 0}> <Download size={16} /> Export CSV </Button>
             <Button onClick={handleAddSupplier} variant="secondary"><Plus size={16} /> Add Supplier</Button>
             <Button onClick={handleAddNewProduct} variant="primary" disabled={!activeSupplierId}><Plus size={16} /> Add Product</Button>
         </div>
@@ -450,6 +484,79 @@ const PricingMatrixView = ({ supplierProducts, suppliers, pricingState, onGpConf
     const [editingBTier, setEditingBTier] = useState(null); // Holds SKU of B-Tier being edited
     const [bTierValue, setBTierValue] = useState(10);
 
+    const handleExportCsv = () => {
+      const headers = [
+        'SKU', 
+        'Brand', 
+        'Baseline Cost',
+        'G-Tier Price', 'G-Tier GP (%)',
+        'B-Tier Price', 'B-Tier GP (%)',
+        'S-Tier Price', 'S-Tier GP (%)',
+        'A-Tier Price', 'A-Tier GP (%)'
+      ];
+      
+      const rows = [];
+      if (pricingState && pricingState[activeBranch]) {
+        Object.keys(pricingState[activeBranch]).sort().forEach(sku => {
+          const state = pricingState[activeBranch][sku];
+          if (!state || !state.anchor.baselineCost) return;
+  
+          // Anchor Brand Row
+          const anchorState = state.anchor;
+          rows.push([
+            sku,
+            'Exide/Willard',
+            anchorState.baselineCost.toFixed(2),
+            anchorState.g.sellPrice.toFixed(2), anchorState.g.actualGp.toFixed(2),
+            anchorState.b.sellPrice.toFixed(2), anchorState.b.actualGp.toFixed(2),
+            anchorState.s.sellPrice.toFixed(2), anchorState.s.actualGp.toFixed(2),
+            anchorState.a.sellPrice.toFixed(2), anchorState.a.actualGp.toFixed(2)
+          ].join(','));
+  
+          // House Brand Rows
+          if (state.hasLocalSource) {
+            const cheapestLocalProduct = supplierProducts
+              .filter(p => p.internalSku === sku && p.supplierType === 'Local/Import')
+              .sort((a, b) => getAdjustedCost(a) - getAdjustedCost(b))[0];
+
+            const houseBrandGp = (price) => {
+              if (!cheapestLocalProduct || !price) return '';
+              const cost = getAdjustedCost(cheapestLocalProduct);
+              return price > 0 ? (((price - cost) / price) * 100).toFixed(2) : '0.00';
+            };
+
+            HOUSE_BRANDS.forEach(brand => {
+              const brandState = state.house[brand];
+              if (!brandState) return;
+  
+              rows.push([
+                sku,
+                brand,
+                cheapestLocalProduct ? getAdjustedCost(cheapestLocalProduct).toFixed(2) : 'N/A',
+                brandState.g.sellPrice.toFixed(2), houseBrandGp(brandState.g.sellPrice),
+                brandState.b.sellPrice.toFixed(2), houseBrandGp(brandState.b.sellPrice),
+                brandState.s.sellPrice.toFixed(2), houseBrandGp(brandState.s.sellPrice),
+                brandState.a.sellPrice.toFixed(2), houseBrandGp(brandState.a.sellPrice)
+              ].join(','));
+            });
+          }
+        });
+      }
+  
+      const csvContent = [headers.join(','), ...rows].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const fileName = `Pricing_Matrix_${activeBranch.replace(/ /g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
+      
+      link.setAttribute('href', url);
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+
     const handleEditBTier = (sku, currentValue) => {
         setEditingBTier(sku);
         setBTierValue(currentValue);
@@ -469,7 +576,11 @@ const PricingMatrixView = ({ supplierProducts, suppliers, pricingState, onGpConf
 
     return (
         <Card>
-            <h2 className="text-2xl font-bold text-gray-900 mb-6">Pricing Matrix for <span className="text-blue-600">{activeBranch}</span></h2>
+            <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">Pricing Matrix for <span className="text-blue-600">{activeBranch}</span></h2>
+              <Button onClick={handleExportCsv} variant="secondary"> <Download size={16} /> Export CSV </Button>
+            </div>
+            
             <div className="overflow-x-auto">
                 <table className="min-w-full">
                     <thead className="bg-gray-50">
@@ -599,6 +710,36 @@ const CustomerPriceListView = ({ pricingState, activeBranch }) => {
             pdf.save(`GBSA_Price_List_${TIER_NAMES[activeTier].replace(/ /g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`);
         });
     };
+
+    const handleExportCsv = () => {
+        const headers = ['SKU', ...ALL_BRANDS];
+
+        const rows = filteredSkus.map(sku => {
+            const rowData = [sku];
+            ALL_BRANDS.forEach(brand => {
+                const price = getDisplayPrice(sku, brand);
+                rowData.push(price !== null ? price.toFixed(2) : '');
+            });
+            return rowData.join(',');
+        });
+
+        const csvContent = [
+            headers.join(','),
+            ...rows
+        ].join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const fileName = `GBSA_Price_List_${TIER_NAMES[activeTier].replace(/ /g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
+        
+        link.setAttribute('href', url);
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
     
     const currentPriceData = pricingState ? pricingState[activeBranch] : {};
 
@@ -638,9 +779,10 @@ const CustomerPriceListView = ({ pricingState, activeBranch }) => {
         <Card>
             <div className="flex flex-wrap justify-between items-center gap-4 mb-6 no-print">
                 <h2 className="text-2xl font-bold text-gray-900">Customer Price List</h2>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                     <Button onClick={handlePrint} variant="secondary"><Printer size={16}/> Print</Button>
                     <Button onClick={handleDownloadPdf} variant="secondary"><Download size={16}/> Download PDF</Button>
+                    <Button onClick={handleExportCsv} variant="secondary"><Download size={16}/> Export CSV</Button>
                 </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 p-4 bg-gray-50 rounded-lg no-print">
